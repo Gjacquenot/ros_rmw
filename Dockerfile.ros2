@@ -1,0 +1,119 @@
+# Save this as Dockerfile
+FROM oraclelinux:8.10
+
+ENV LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8 \
+    DEBIAN_FRONTEND=noninteractive
+
+# Install basic tools, enable repos, add EPEL, CodeReady (CRB) equivalent,
+# add ROS2 repo package, then install ros-humble-desktop.
+RUN dnf -y update && \
+    dnf -y install dnf-plugins-core yum-utils curl gnupg2 which tar xz && \
+    # ensure langpack (container minimal images may not include en_US)
+    dnf -y install glibc-langpack-en || true && \
+    # Enable Oracle Linux developer/EPEL repositories (Oracle docs show this pattern)
+    # (optional: you can enable other OL8 repos if needed)
+    yum-config-manager --enable ol8_baseos_latest ol8_appstream ol8_addons ol8_developer_EPEL || true && \
+    # Enable CodeReady / CRB equivalent repo for Oracle Linux 8
+    # repo id on Oracle Linux 8 is ol8_codeready_builder (if not present check repolist)
+    yum-config-manager --enable ol8_codeready_builder || true && \
+    # Install EPEL release package (EPEL8)
+    dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm && \
+    # install the ros2-release rpm which configures repo keys & repo files
+    dnf -y install curl && \
+    ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F "tag_name" | awk -F\" '{print $4}') && \
+    dnf -y install "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-release-${ROS_APT_SOURCE_VERSION}-1.noarch.rpm" && \
+    # Update and install ROS 2 (desktop variant here; swap for ros-humble-ros-base if you want headless)
+    dnf -y update && \
+    dnf -y install ros-humble-desktop && \
+    # cleanup
+    dnf -y clean all && rm -rf /var/cache/dnf
+
+# Setup entrypoint: source ROS setup.bash for interactive shells
+SHELL ["/bin/bash", "-lc"]
+ENV ROS_DISTRO=humble
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /etc/profile.d/ros.sh
+
+# default command: interactive shell
+CMD ["/bin/bash"]
+
+COPY --from=oracle_ros_fasstdds /opt/fast-dds-3 /opt/fast-dds-3
+
+RUN dnf -y update \
+ && dnf -y install oracle-epel-release-el8 || sudo dnf install -y epel-release \
+ && dnf install -y git python3-pip cmake3 ninja-build \
+ && pip3 install -U colcon-common-extensions
+
+ENV ROS2_DISTRO="humble"
+ENV FASTDDS_PREFIX=/opt/fast-dds-3
+ENV CMAKE_PREFIX_PATH=$FASTDDS_PREFIX:$CMAKE_PREFIX_PATH
+ENV LD_LIBRARY_PATH=$FASTDDS_PREFIX/lib:$LD_LIBRARY_PATH
+ENV PKG_CONFIG_PATH=$FASTDDS_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH
+ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+ARG FASTDDS_PREFIX=/opt/fast-dds-3
+
+RUN mkdir -p ros2_ws/src && cd ros2_ws/src \
+ && git clone -b humble https://github.com/ament/ament_cmake.git \
+ && git clone -b humble https://github.com/ros2/ament_cmake_ros.git \
+ && colcon build \
+    --symlink-install \
+    --packages-select ament_cmake ament_cmake_ros ament_cmake_ros_core \
+    --cmake-args \
+        -D CMAKE_BUILD_TYPE=Release \
+        -D BUILD_TESTING=OFF \
+        -D CMAKE_VERBOSE_MAKEFILE=ON \
+        -D CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH
+
+# RUN mkdir -p ros2_ws/src && cd ros2_ws/src \
+# && git clone -b kilted https://github.com/ros2/rmw_fastrtps.git \
+# && colcon build \
+# --symlink-install \
+# --packages-select rmw_fastrtps_cpp rmw_fastrtps_dynamic_cpp rmw_fastrtps_shared_cpp \
+# --cmake-args \
+#     -D CMAKE_BUILD_TYPE=Release \
+#     -D BUILD_TESTING=OFF \
+#     -D CMAKE_VERBOSE_MAKEFILE=ON \
+#     -D CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH && zz
+
+
+RUN mkdir -p ros2_ws/src && cd ros2_ws/src \
+ && git clone -b humble https://github.com/ros2/rmw_fastrtps.git \
+ && cd rmw_fastrtps \
+ && find . -name "CMakeLists.txt" -exec sed -i -E \
+    -e 's|find_package\(fastrtps [0-9\.]+ REQUIRED CONFIG\)|find_package(fastdds REQUIRED CONFIG)|g' \
+    -e 's|find_package\(FastRTPS [0-9\.]+ REQUIRED MODULE\)|find_package(fastcdr REQUIRED CONFIG)|g' {} + \
+ && echo "=== Step 2: update includes from .h -> .hpp and paths fastrtps -> fastdds ===" \
+ && echo "==> Updating includes..." \
+ && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
+  -exec sed -i -E \
+  -e 's|#include <fastrtps/fastdds/rtps/|#include <fastdds/rtps/|g' \
+  -e 's|#include <fastrtps/rtps/|#include <fastdds/rtps/|g' \
+  -e 's|\.h>|.hpp>|g' {} + \
+ && echo "=== Step 3: update namespaces ===" \
+ && echo "==> Updating namespaces..." \
+ && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
+  -exec sed -i -E \
+  -e 's|eprosima::fastrtps::rtps|eprosima::fastdds::rtps|g' {} + \
+ && echo "Fix includes from Guid.h -> Guid.hpp for Fast-DDS v3" \
+ && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
+    -exec sed -i -E 's|fastdds/rtps/common/Guid\.h|fastdds/rtps/common/Guid.hpp|g' {} + \
+ && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
+    -exec sed -i -E 's|fastdds/rtps/common/InstanceHandle\.h|fastdds/rtps/common/InstanceHandle.hpp|g' {} + \
+ && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
+    -exec sed -i -E 's|fastdds/rtps/common/SerializedPayload\.h|fastdds/rtps/common/SerializedPayload.hpp|g' {} + \
+ && cd .. \
+ && colcon build \
+    --symlink-install \
+    --packages-select rmw_fastrtps_cpp rmw_fastrtps_dynamic_cpp rmw_fastrtps_shared_cpp \
+    --cmake-args \
+        -D CMAKE_BUILD_TYPE=Release \
+        -D BUILD_TESTING=OFF \
+        -D CMAKE_VERBOSE_MAKEFILE=ON \
+        -D CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH && zz
+
+RUN ros2 run demo_nodes_cpp talker &      # from the distro or overlay demo package
+RUN ros2 run demo_nodes_cpp listener&
+# or use ros2 topic pub/echo:
+RUN ros2 topic pub /chatter std_msgs/String "data: 'hello'" -r 1 
+RUN ros2 topic echo /chatter
