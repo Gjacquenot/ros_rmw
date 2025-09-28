@@ -53,6 +53,12 @@ ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
 ARG FASTDDS_PREFIX=/opt/fast-dds-3
 
+#RUN mkdir -p /opt/src \
+# && cd /opt/src \
+# && git clone --recursive https://github.com/eProsima/Fast-DDS-Gen.git fastddsgen \
+# && cd fastddsgen \
+# && ./gradlew assemble
+
 RUN mkdir -p ros2_ws/src && cd ros2_ws/src \
  && git clone -b humble https://github.com/ament/ament_cmake.git \
  && git clone -b humble https://github.com/ros2/ament_cmake_ros.git \
@@ -75,26 +81,25 @@ RUN mkdir -p ros2_ws/src && cd ros2_ws/src \
 #     -D BUILD_TESTING=OFF \
 #     -D CMAKE_VERBOSE_MAKEFILE=ON \
 #     -D CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH && zz
-
-
 RUN mkdir -p ros2_ws/src && cd ros2_ws/src \
  && git clone -b humble https://github.com/ros2/rmw_fastrtps.git \
+ && cd rmw_fastrtps 
+RUN mkdir -p ros2_ws/src && cd ros2_ws/src \
  && cd rmw_fastrtps \
- && find . -name "CMakeLists.txt" -exec sed -i -E \
-    -e 's|find_package\(fastrtps [0-9\.]+ REQUIRED CONFIG\)|find_package(fastdds REQUIRED CONFIG)|g' \
-    -e 's|find_package\(FastRTPS [0-9\.]+ REQUIRED MODULE\)|find_package(fastcdr REQUIRED CONFIG)|g' {} + \
+ && git grep -l "fastrtps/" -- '*.h' '*.hpp' '*.cpp' '*.cxx' '*.cc' | xargs sed -i 's|<fastrtps/|<fastdds/|g; s|"fastrtps/|"fastdds/|g' \
+ && git grep -l "eprosima::fastrtps::" -- '*.h' '*.hpp' '*.cpp' | xargs sed -i 's|eprosima::fastrtps::|eprosima::fastdds::|g' \
  && echo "=== Step 2: update includes from .h -> .hpp and paths fastrtps -> fastdds ===" \
  && echo "==> Updating includes..." \
  && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
-  -exec sed -i -E \
-  -e 's|#include <fastrtps/fastdds/rtps/|#include <fastdds/rtps/|g' \
-  -e 's|#include <fastrtps/rtps/|#include <fastdds/rtps/|g' \
-  -e 's|\.h>|.hpp>|g' {} + \
+   -exec sed -i -E \
+   -e 's|#include <fastrtps/fastdds/rtps/|#include <fastdds/rtps/|g' \
+   -e 's|#include <fastrtps/rtps/|#include <fastdds/rtps/|g' \
+   -e 's|\.h>|.hpp>|g' {} + \
  && echo "=== Step 3: update namespaces ===" \
  && echo "==> Updating namespaces..." \
  && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
-  -exec sed -i -E \
-  -e 's|eprosima::fastrtps::rtps|eprosima::fastdds::rtps|g' {} + \
+   -exec sed -i -E \
+   -e 's|eprosima::fastrtps::rtps|eprosima::fastdds::rtps|g' {} + \
  && echo "Fix includes from Guid.h -> Guid.hpp for Fast-DDS v3" \
  && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
     -exec sed -i -E 's|fastdds/rtps/common/Guid\.h|fastdds/rtps/common/Guid.hpp|g' {} + \
@@ -102,18 +107,49 @@ RUN mkdir -p ros2_ws/src && cd ros2_ws/src \
     -exec sed -i -E 's|fastdds/rtps/common/InstanceHandle\.h|fastdds/rtps/common/InstanceHandle.hpp|g' {} + \
  && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
     -exec sed -i -E 's|fastdds/rtps/common/SerializedPayload\.h|fastdds/rtps/common/SerializedPayload.hpp|g' {} + \
- && cd .. \
- && colcon build \
-    --symlink-install \
-    --packages-select rmw_fastrtps_cpp rmw_fastrtps_dynamic_cpp rmw_fastrtps_shared_cpp \
-    --cmake-args \
-        -D CMAKE_BUILD_TYPE=Release \
-        -D BUILD_TESTING=OFF \
-        -D CMAKE_VERBOSE_MAKEFILE=ON \
-        -D CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH && zz
+ && cd ..
 
-RUN ros2 run demo_nodes_cpp talker &      # from the distro or overlay demo package
-RUN ros2 run demo_nodes_cpp listener&
-# or use ros2 topic pub/echo:
-RUN ros2 topic pub /chatter std_msgs/String "data: 'hello'" -r 1 
-RUN ros2 topic echo /chatter
+
+# RUN colcon build --event-handlers console_direct+  --symlink-install --packages-select rmw_fastrtps_shared_cpp rmw_fastrtps_cpp --cmake-args -D CMAKE_BUILD_TYPE=Release  -D BUILD_TESTING=OFF -D CMAKE_VERBOSE_MAKEFILE=ON -D CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH
+
+# RUN mkdir -p ros2_ws/src && cd ros2_ws/src \
+# && git clone -b humble https://github.com/ros2/rmw_fastrtps.git \
+# && cd rmw_fastrtps \
+# && git grep -l "fastrtps/" -- '*.h' '*.hpp' '*.cpp' '*.cxx' '*.cc' | xargs sed -i 's|<fastrtps/|<fastdds/|g; s|"fastrtps/|"fastdds/|g' \
+# && git grep -l "eprosima::fastrtps::" -- '*.h' '*.hpp' '*.cpp' | xargs sed -i 's|eprosima::fastrtps::|eprosima::fastdds::|g' \
+# && echo "=== Step 2: update includes from .h -> .hpp and paths fastrtps -> fastdds ===" \
+# && echo "==> Updating includes..." \
+# && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
+#   -exec sed -i -E \
+#   -e 's|#include <fastrtps/fastdds/rtps/|#include <fastdds/rtps/|g' \
+#   -e 's|#include <fastrtps/rtps/|#include <fastdds/rtps/|g' \
+#   -e 's|\.h>|.hpp>|g' {} + \
+# && echo "=== Step 3: update namespaces ===" \
+# && echo "==> Updating namespaces..." \
+# && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
+#   -exec sed -i -E \
+#   -e 's|eprosima::fastrtps::rtps|eprosima::fastdds::rtps|g' {} + \
+# && echo "Fix includes from Guid.h -> Guid.hpp for Fast-DDS v3" \
+# && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
+#    -exec sed -i -E 's|fastdds/rtps/common/Guid\.h|fastdds/rtps/common/Guid.hpp|g' {} + \
+# && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
+#    -exec sed -i -E 's|fastdds/rtps/common/InstanceHandle\.h|fastdds/rtps/common/InstanceHandle.hpp|g' {} + \
+# && find . -type f \( -name "*.hpp" -o -name "*.cpp" -o -name "*.h" \) \
+#    -exec sed -i -E 's|fastdds/rtps/common/SerializedPayload\.h|fastdds/rtps/common/SerializedPayload.hpp|g' {} + \
+# && cd .. \
+# && colcon build \
+#    --symlink-install \
+#    --packages-select rmw_fastrtps_shared_cpp rmw_fastrtps_cpp \
+#    --cmake-args \
+#        -D CMAKE_BUILD_TYPE=Release \
+#        -D BUILD_TESTING=OFF \
+#        -D CMAKE_VERBOSE_MAKEFILE=ON \
+#        -D CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH && zz
+#
+# RUN ros2 run demo_nodes_cpp talker &      # from the distro or overlay demo package
+# RUN ros2 run demo_nodes_cpp listener&
+# # or use ros2 topic pub/echo:
+# RUN ros2 topic pub /chatter std_msgs/String "data: 'hello'" -r 1 
+# RUN ros2 topic echo /chatter
+
+
